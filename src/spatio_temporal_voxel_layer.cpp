@@ -156,6 +156,13 @@ void SpatioTemporalVoxelLayer::onInitialize(void)
 
   RCLCPP_INFO(logger_, "%s created underlying voxel grid.", getName().c_str());
 
+  //Creating the service for activating the clear_grid_except_region
+  auto clear_grid_except_region_srv_callback = std::bind(
+    &SpatioTemporalVoxelLayer::ClearGridExceptRegionCallback, this, _1, _2, _3);
+  std::string clear_grid_except_topic = "stvl_clear_grid_except";
+  clear_grid_except_service = rclcpp_node_->create_service<nav2_msgs::srv::ClearCostmapExceptRegion>(
+    clear_grid_except_topic, clear_grid_except_region_srv_callback);
+
   std::stringstream ss(topics_string);
   std::string source;
   while (ss >> source) {
@@ -739,6 +746,7 @@ void SpatioTemporalVoxelLayer::updateBounds(
     should_save = node->now() - _last_map_save_time > *_map_save_duration;
   }
   if (!_mapping_mode) {
+    ClearGridExceptRegion(robot_x, robot_y, cleared_cells);
     _voxel_grid->ClearFrustums(clearing_observations, cleared_cells);
   } else if (should_save) {
     _last_map_save_time = node->now();
@@ -799,6 +807,40 @@ void SpatioTemporalVoxelLayer::SaveGridCallback(
 
   RCLCPP_WARN(logger_, "SpatioTemporalVoxelLayer: Failed to save grid.");
   resp->status = false;
+}
+
+/*****************************************************************************/
+void SpatioTemporalVoxelLayer::ClearGridExceptRegionCallback(
+  const std::shared_ptr<rmw_request_id_t>/*request_header*/,
+  const std::shared_ptr<nav2_msgs::srv::ClearCostmapExceptRegion::Request> request,
+  std::shared_ptr<nav2_msgs::srv::ClearCostmapExceptRegion::Response> response)
+/*****************************************************************************/
+{
+  if (_mapping_mode) {
+    RCLCPP_WARN(node_->get_logger(),
+      "Received request to clear the grid while on mapping mode. Not doing anything.");
+    return;
+  }
+
+  RCLCPP_INFO(node_->get_logger(),
+    "Received request to clear the grid except a square region of side " + std::to_string(request->reset_distance));
+
+  _clear_grid_except_region = true;
+  _reset_distance = request->reset_distance;
+}
+
+/*****************************************************************************/
+void SpatioTemporalVoxelLayer::ClearGridExceptRegion(
+  double robot_x, double robot_y,
+  std::unordered_set<volume_grid::occupany_cell> & cleared_cells)
+/*****************************************************************************/
+{
+  if (!_clear_grid_except_region) {
+    return;
+  }
+
+  _voxel_grid->ClearGridExceptRegion(robot_x, robot_y, _reset_distance,  cleared_cells);
+  _clear_grid_except_region = false;
 }
 
 }  // namespace spatio_temporal_voxel_layer
